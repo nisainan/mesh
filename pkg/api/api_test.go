@@ -11,8 +11,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/traefik/mesh/pkg/k8s"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 var localhost = "127.0.0.1"
@@ -22,8 +20,12 @@ func TestEnableReadiness(t *testing.T) {
 	log.SetOutput(os.Stdout)
 	log.SetLevel(logrus.DebugLevel)
 
-	client := fake.NewSimpleClientset()
-	api, err := NewAPI(log, 9000, localhost, client, "foo")
+	//client := fake.NewSimpleClientset()
+	//api, err := NewAPI(log, 9000, localhost, client, "foo")
+
+	//clientMock := k8s.NewClientMock(test.mockFile)
+	//api, err := NewAPI(log, 9000, localhost, clientMock.KubernetesClient(), "foo")
+	api, err := NewAPI(log, 9000, localhost, "foo")
 
 	require.NoError(t, err)
 	assert.Equal(t, false, api.readiness.Get().(bool))
@@ -60,8 +62,9 @@ func TestGetReadiness(t *testing.T) {
 			log.SetOutput(os.Stdout)
 			log.SetLevel(logrus.DebugLevel)
 
-			client := fake.NewSimpleClientset()
-			api, err := NewAPI(log, 9000, localhost, client, "foo")
+			//clientMock := k8s.NewClientMock(test.mockFile)
+			//api, err := NewAPI(log, 9000, localhost, clientMock.KubernetesClient(), "foo")
+			api, err := NewAPI(log, 9000, localhost, "foo")
 
 			require.NoError(t, err)
 			api.readiness.Set(test.readiness)
@@ -86,8 +89,8 @@ func TestGetCurrentConfiguration(t *testing.T) {
 	log.SetOutput(os.Stdout)
 	log.SetLevel(logrus.DebugLevel)
 
-	client := fake.NewSimpleClientset()
-	api, err := NewAPI(log, 9000, localhost, client, "foo")
+	//client := fake.NewSimpleClientset()
+	api, err := NewAPI(log, 9000, localhost, "foo")
 
 	require.NoError(t, err)
 	api.configuration.Set("foo")
@@ -142,8 +145,9 @@ func TestGetMeshNodes(t *testing.T) {
 			log.SetOutput(os.Stdout)
 			log.SetLevel(logrus.DebugLevel)
 
-			clientMock := k8s.NewClientMock(test.mockFile)
-			api, err := NewAPI(log, 9000, localhost, clientMock.KubernetesClient(), "foo")
+			//clientMock := k8s.NewClientMock(test.mockFile)
+			//api, err := NewAPI(log, 9000, localhost, clientMock.KubernetesClient(), "foo")
+			api, err := NewAPI(log, 9000, localhost, "foo")
 
 			require.NoError(t, err)
 
@@ -194,8 +198,8 @@ func TestGetMeshNodeConfiguration(t *testing.T) {
 			log.SetOutput(os.Stdout)
 			log.SetLevel(logrus.DebugLevel)
 
-			clientMock := k8s.NewClientMock(test.mockFile)
-			api, err := NewAPI(log, 9000, localhost, clientMock.KubernetesClient(), "foo")
+			//client := fake.NewSimpleClientset()
+			api, err := NewAPI(log, 9000, localhost, "foo")
 
 			require.NoError(t, err)
 

@@ -3,24 +3,21 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
-	accessinformer "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/access/informers/externalversions"
-	accesslister "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/access/listers/access/v1alpha2"
-	specsinformer "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/specs/informers/externalversions"
-	specslister "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/specs/listers/specs/v1alpha3"
-	splitinformer "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/split/informers/externalversions"
-	splitlister "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/split/listers/split/v1alpha3"
+	"github.com/panjf2000/ants/v2"
 	"github.com/sirupsen/logrus"
 	"github.com/traefik/mesh/cmd"
-	"github.com/traefik/mesh/pkg/annotations"
+	"github.com/traefik/mesh/pkg/dis"
 	"github.com/traefik/mesh/pkg/k8s"
 	"github.com/traefik/mesh/pkg/provider"
 	"github.com/traefik/mesh/pkg/topology"
 	"github.com/traefik/traefik/v2/pkg/config/dynamic"
-	"k8s.io/apimachinery/pkg/api/errors"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -58,12 +55,12 @@ type Config struct {
 	Namespace        string
 	WatchNamespaces  []string
 	IgnoreNamespaces []string
-	MinHTTPPort      int32
-	MaxHTTPPort      int32
-	MinTCPPort       int32
-	MaxTCPPort       int32
-	MinUDPPort       int32
-	MaxUDPPort       int32
+	//MinHTTPPort      int32
+	//MaxHTTPPort      int32
+	//MinTCPPort       int32
+	//MaxTCPPort       int32
+	//MinUDPPort       int32
+	//MaxUDPPort       int32
 }
 
 // Controller hold controller configuration.
@@ -71,42 +68,52 @@ type Controller struct {
 	mu     sync.Mutex
 	stopCh chan struct{}
 
-	cfg                  Config
-	workQueue            workqueue.RateLimitingInterface
-	shadowServiceManager *ShadowServiceManager
-	provider             *provider.Provider
-	resourceFilter       *k8s.ResourceFilter
-	tcpStateTable        *PortMapping
-	udpStateTable        *PortMapping
-	topologyBuilder      TopologyBuilder
-	store                SharedStore
-	logger               logrus.FieldLogger
+	cfg       Config
+	workQueue workqueue.RateLimitingInterface
+	//shadowServiceManager *ShadowServiceManager
+	provider       *provider.Provider
+	resourceFilter *k8s.ResourceFilter
+	//tcpStateTable        *PortMapping
+	//udpStateTable        *PortMapping
+	topologyBuilder TopologyBuilder
+	store           SharedStore
+	logger          logrus.FieldLogger
 
-	clients              k8s.Client
-	kubernetesFactory    informers.SharedInformerFactory
-	accessFactory        accessinformer.SharedInformerFactory
-	specsFactory         specsinformer.SharedInformerFactory
-	splitFactory         splitinformer.SharedInformerFactory
-	podLister            listers.PodLister
-	serviceLister        listers.ServiceLister
-	endpointsLister      listers.EndpointsLister
-	trafficTargetLister  accesslister.TrafficTargetLister
-	httpRouteGroupLister specslister.HTTPRouteGroupLister
-	tcpRouteLister       specslister.TCPRouteLister
-	trafficSplitLister   splitlister.TrafficSplitLister
+	clients           k8s.Client
+	kubernetesFactory informers.SharedInformerFactory
+	//accessFactory        accessinformer.SharedInformerFactory
+	//specsFactory         specsinformer.SharedInformerFactory
+	//splitFactory         splitinformer.SharedInformerFactory
+	podLister listers.PodLister
+	//serviceLister        listers.ServiceLister
+	//endpointsLister      listers.EndpointsLister
+	//trafficTargetLister  accesslister.TrafficTargetLister
+	//httpRouteGroupLister specslister.HTTPRouteGroupLister
+	//tcpRouteLister       specslister.TCPRouteLister
+	//trafficSplitLister   splitlister.TrafficSplitLister
+
+	pool   *ants.Pool
+	ticker *time.Ticker
+	dis    *dis.Discover
 }
 
 // NewMeshController builds the informers and other required components of the mesh controller, and returns an
 // initialized mesh controller object.
-func NewMeshController(clients k8s.Client, cfg Config, store SharedStore, logger logrus.FieldLogger) *Controller {
+func NewMeshController(clients k8s.Client, cfg Config, store SharedStore, logger logrus.FieldLogger) (*Controller, error) {
 	c := &Controller{
 		logger:  logger,
 		cfg:     cfg,
 		clients: clients,
 		store:   store,
 		stopCh:  make(chan struct{}),
+		ticker:  time.NewTicker(time.Second * 3),
+		dis:     dis.NewDiscovery(),
 	}
-
+	pool, err := ants.NewPool(500)
+	if err != nil {
+		return nil, err
+	}
+	c.pool = pool
 	// Initialize the ignored and watched resources.
 	c.resourceFilter = k8s.NewResourceFilter(
 		k8s.WatchNamespaces(cfg.WatchNamespaces...),
@@ -120,74 +127,94 @@ func NewMeshController(clients k8s.Client, cfg Config, store SharedStore, logger
 	c.workQueue = workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	handler := cache.FilteringResourceEventHandler{
 		FilterFunc: c.isWatchedResource,
-		Handler:    &enqueueWorkHandler{logger: c.logger, workQueue: c.workQueue},
+		Handler:    &enqueueWorkHandler{logger: c.logger, workQueue: c.workQueue, discover: c.dis},
 	}
 
 	// Create SharedInformers, listers and register the event handler to informers that are not ACL related.
-	c.kubernetesFactory = informers.NewSharedInformerFactoryWithOptions(c.clients.KubernetesClient(), k8s.ResyncPeriod)
-	c.splitFactory = splitinformer.NewSharedInformerFactoryWithOptions(c.clients.SplitClient(), k8s.ResyncPeriod)
-	c.specsFactory = specsinformer.NewSharedInformerFactoryWithOptions(c.clients.SpecsClient(), k8s.ResyncPeriod)
+	//c.kubernetesFactory = informers.NewSharedInformerFactoryWithOptions(c.clients.KubernetesClient(), k8s.ResyncPeriod)
+	// A pod of service must have a label 'unique_id'
+	selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{{
+			Key:      "unique_id",
+			Operator: metav1.LabelSelectorOpExists,
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.kubernetesFactory = informers.NewSharedInformerFactoryWithOptions(c.clients.KubernetesClient(), k8s.ResyncPeriod,
+		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
+			//options.Kind = "Pod"
+			options.LabelSelector = selector.String()
+			//options.Watch = true
+		}))
+
+	//c.splitFactory = splitinformer.NewSharedInformerFactoryWithOptions(c.clients.SplitClient(), k8s.ResyncPeriod)
+	//c.specsFactory = specsinformer.NewSharedInformerFactoryWithOptions(c.clients.SpecsClient(), k8s.ResyncPeriod)
+
+	// watch pods
+	c.kubernetesFactory.Core().V1().Pods().Informer().AddEventHandler(handler)
 
 	c.podLister = c.kubernetesFactory.Core().V1().Pods().Lister()
-	c.endpointsLister = c.kubernetesFactory.Core().V1().Endpoints().Lister()
-	c.serviceLister = c.kubernetesFactory.Core().V1().Services().Lister()
-	c.trafficSplitLister = c.splitFactory.Split().V1alpha3().TrafficSplits().Lister()
-	c.httpRouteGroupLister = c.specsFactory.Specs().V1alpha3().HTTPRouteGroups().Lister()
-	c.tcpRouteLister = c.specsFactory.Specs().V1alpha3().TCPRoutes().Lister()
+	//c.endpointsLister = c.kubernetesFactory.Core().V1().Endpoints().Lister()
+	//c.serviceLister = c.kubernetesFactory.Core().V1().Services().Lister()
+	//c.trafficSplitLister = c.splitFactory.Split().V1alpha3().TrafficSplits().Lister()
+	//c.httpRouteGroupLister = c.specsFactory.Specs().V1alpha3().HTTPRouteGroups().Lister()
+	//c.tcpRouteLister = c.specsFactory.Specs().V1alpha3().TCPRoutes().Lister()
 
-	c.kubernetesFactory.Core().V1().Services().Informer().AddEventHandler(handler)
-	c.kubernetesFactory.Core().V1().Endpoints().Informer().AddEventHandler(handler)
-	c.splitFactory.Split().V1alpha3().TrafficSplits().Informer().AddEventHandler(handler)
-	c.specsFactory.Specs().V1alpha3().HTTPRouteGroups().Informer().AddEventHandler(handler)
-	c.specsFactory.Specs().V1alpha3().TCPRoutes().Informer().AddEventHandler(handler)
+	//c.kubernetesFactory.Core().V1().Services().Informer().AddEventHandler(handler)
+	//c.kubernetesFactory.Core().V1().Endpoints().Informer().AddEventHandler(handler)
+	//c.splitFactory.Split().V1alpha3().TrafficSplits().Informer().AddEventHandler(handler)
+	//c.specsFactory.Specs().V1alpha3().HTTPRouteGroups().Informer().AddEventHandler(handler)
+	//c.specsFactory.Specs().V1alpha3().TCPRoutes().Informer().AddEventHandler(handler)
 
 	// Create SharedInformers, listers and register the event handler for ACL related resources.
 	if c.cfg.ACLEnabled {
-		c.accessFactory = accessinformer.NewSharedInformerFactoryWithOptions(c.clients.AccessClient(), k8s.ResyncPeriod)
+		//c.accessFactory = accessinformer.NewSharedInformerFactoryWithOptions(c.clients.AccessClient(), k8s.ResyncPeriod)
 
-		c.trafficTargetLister = c.accessFactory.Access().V1alpha2().TrafficTargets().Lister()
+		//c.trafficTargetLister = c.accessFactory.Access().V1alpha2().TrafficTargets().Lister()
 
-		c.accessFactory.Access().V1alpha2().TrafficTargets().Informer().AddEventHandler(handler)
-		c.kubernetesFactory.Core().V1().Pods().Informer().AddEventHandler(handler)
+		//c.accessFactory.Access().V1alpha2().TrafficTargets().Informer().AddEventHandler(handler)
+		//c.kubernetesFactory.Core().V1().Pods().Informer().AddEventHandler(handler)
 	}
 
-	c.tcpStateTable = NewPortMapping(c.cfg.Namespace, c.serviceLister, logger, c.cfg.MinTCPPort, c.cfg.MaxTCPPort)
+	//c.tcpStateTable = NewPortMapping(c.cfg.Namespace, c.serviceLister, logger, c.cfg.MinTCPPort, c.cfg.MaxTCPPort)
+	//
+	//c.udpStateTable = NewPortMapping(c.cfg.Namespace, c.serviceLister, logger, c.cfg.MinUDPPort, c.cfg.MaxUDPPort)
 
-	c.udpStateTable = NewPortMapping(c.cfg.Namespace, c.serviceLister, logger, c.cfg.MinUDPPort, c.cfg.MaxUDPPort)
+	//c.shadowServiceManager = NewShadowServiceManager(
+	//	c.logger,
+	//	c.serviceLister,
+	//	c.cfg.Namespace,
+	//	c.tcpStateTable,
+	//	c.udpStateTable,
+	//	c.cfg.DefaultMode,
+	//	c.cfg.MinHTTPPort,
+	//	c.cfg.MaxHTTPPort,
+	//	c.clients.KubernetesClient(),
+	//)
 
-	c.shadowServiceManager = NewShadowServiceManager(
-		c.logger,
-		c.serviceLister,
-		c.cfg.Namespace,
-		c.tcpStateTable,
-		c.udpStateTable,
-		c.cfg.DefaultMode,
-		c.cfg.MinHTTPPort,
-		c.cfg.MaxHTTPPort,
-		c.clients.KubernetesClient(),
-	)
+	//c.topologyBuilder = topology.NewBuilder(
+	//	c.serviceLister,
+	//	c.endpointsLister,
+	//	c.podLister,
+	//	c.trafficTargetLister,
+	//	c.trafficSplitLister,
+	//	c.httpRouteGroupLister,
+	//	c.tcpRouteLister,
+	//	c.logger,
+	//)
+	//
+	//providerCfg := provider.Config{
+	//	MinHTTPPort:        c.cfg.MinHTTPPort,
+	//	MaxHTTPPort:        c.cfg.MaxHTTPPort,
+	//	ACL:                c.cfg.ACLEnabled,
+	//	DefaultTrafficType: c.cfg.DefaultMode,
+	//}
+	//
+	//c.provider = provider.New(c.tcpStateTable, c.udpStateTable, annotations.BuildMiddlewares, providerCfg, c.logger)
 
-	c.topologyBuilder = topology.NewBuilder(
-		c.serviceLister,
-		c.endpointsLister,
-		c.podLister,
-		c.trafficTargetLister,
-		c.trafficSplitLister,
-		c.httpRouteGroupLister,
-		c.tcpRouteLister,
-		c.logger,
-	)
-
-	providerCfg := provider.Config{
-		MinHTTPPort:        c.cfg.MinHTTPPort,
-		MaxHTTPPort:        c.cfg.MaxHTTPPort,
-		ACL:                c.cfg.ACLEnabled,
-		DefaultTrafficType: c.cfg.DefaultMode,
-	}
-
-	c.provider = provider.New(c.tcpStateTable, c.udpStateTable, annotations.BuildMiddlewares, providerCfg, c.logger)
-
-	return c
+	return c, nil
 }
 
 // Run is the main controller loop.
@@ -212,26 +239,35 @@ func (c *Controller) Run() error {
 	}
 
 	// Load the TCP and UDP port mapper states.
-	if err := c.loadPortMappersState(); err != nil {
-		return fmt.Errorf("could not load port mapper states: %w", err)
-	}
+	//if err := c.loadPortMappersState(); err != nil {
+	//	return fmt.Errorf("could not load port mapper states: %w", err)
+	//}
 
 	// Enable API readiness endpoint, informers are started and default conf is available.
 	c.store.SetReadiness(true)
 
 	// Start to poll work from the queue.
-	waitGroup.Add(1)
+	waitGroup.Add(2)
 
 	runWorker := func() {
 		defer waitGroup.Done()
 		c.runWorker()
 	}
+	runPodStatusWatch := func() {
+		defer waitGroup.Done()
+		c.runPodStatusWatch()
+	}
 
 	go wait.Until(runWorker, time.Second, c.stopCh)
+	go wait.Until(runPodStatusWatch, time.Second, c.stopCh)
 
 	<-c.stopCh
 
 	return nil
+}
+
+func (c *Controller) GetPodListener() listers.PodLister {
+	return c.podLister
 }
 
 // Shutdown shuts down the controller.
@@ -259,11 +295,11 @@ func (c *Controller) startInformers(syncTimeout time.Duration) error {
 		return err
 	}
 
-	if c.cfg.ACLEnabled {
-		if err := c.startACLInformers(ctx.Done()); err != nil {
-			return err
-		}
-	}
+	//if c.cfg.ACLEnabled {
+	//	if err := c.startACLInformers(ctx.Done()); err != nil {
+	//		return err
+	//	}
+	//}
 
 	return nil
 }
@@ -277,48 +313,72 @@ func (c *Controller) startBaseInformers(stopCh <-chan struct{}) error {
 		}
 	}
 
-	c.splitFactory.Start(c.stopCh)
+	//c.splitFactory.Start(c.stopCh)
 
-	for t, ok := range c.splitFactory.WaitForCacheSync(stopCh) {
-		if !ok {
-			return fmt.Errorf("timed out waiting for controller caches to sync: %s", t)
-		}
-	}
-
-	c.specsFactory.Start(c.stopCh)
-
-	for t, ok := range c.specsFactory.WaitForCacheSync(stopCh) {
-		if !ok {
-			return fmt.Errorf("timed out waiting for controller caches to sync: %s", t)
-		}
-	}
-
-	return nil
-}
-
-func (c *Controller) startACLInformers(stopCh <-chan struct{}) error {
-	c.accessFactory.Start(c.stopCh)
-
-	for t, ok := range c.accessFactory.WaitForCacheSync(stopCh) {
-		if !ok {
-			return fmt.Errorf("timed out waiting for controller caches to sync: %s", t)
-		}
-	}
+	//for t, ok := range c.splitFactory.WaitForCacheSync(stopCh) {
+	//	if !ok {
+	//		return fmt.Errorf("timed out waiting for controller caches to sync: %s", t)
+	//	}
+	//}
+	//
+	//c.specsFactory.Start(c.stopCh)
+	//
+	//for t, ok := range c.specsFactory.WaitForCacheSync(stopCh) {
+	//	if !ok {
+	//		return fmt.Errorf("timed out waiting for controller caches to sync: %s", t)
+	//	}
+	//}
 
 	return nil
 }
 
-// loadPortMappersState loads the TCP and UDP port mapper states.
-func (c *Controller) loadPortMappersState() error {
-	if err := c.tcpStateTable.LoadState(); err != nil {
-		return fmt.Errorf("unable to load TCP state table: %w", err)
-	}
+//func (c *Controller) startACLInformers(stopCh <-chan struct{}) error {
+//	c.accessFactory.Start(c.stopCh)
+//
+//	for t, ok := range c.accessFactory.WaitForCacheSync(stopCh) {
+//		if !ok {
+//			return fmt.Errorf("timed out waiting for controller caches to sync: %s", t)
+//		}
+//	}
+//
+//	return nil
+//}
+//
+//// loadPortMappersState loads the TCP and UDP port mapper states.
+//func (c *Controller) loadPortMappersState() error {
+//	if err := c.tcpStateTable.LoadState(); err != nil {
+//		return fmt.Errorf("unable to load TCP state table: %w", err)
+//	}
+//
+//	if err := c.udpStateTable.LoadState(); err != nil {
+//		return fmt.Errorf("unable to load UDP state table: %w", err)
+//	}
+//
+//	return nil
+//}
 
-	if err := c.udpStateTable.LoadState(); err != nil {
-		return fmt.Errorf("unable to load UDP state table: %w", err)
+func (c *Controller) runPodStatusWatch() {
+	for {
+		select {
+		case <-c.ticker.C:
+			podList, err := c.podLister.List(labels.Everything())
+			if err != nil {
+				return
+			}
+			for _, pod := range podList {
+				if pod.Status.Phase != corev1.PodRunning {
+					// 代表Pod出现了问题，无需健康检查，直接下线
+					c.pool.Submit(func() {
+						c.dis.Cancel(pod)
+					})
+					continue
+				}
+				c.pool.Submit(func() {
+					c.dis.HealthCheckOrCancel(pod)
+				})
+			}
+		}
 	}
-
-	return nil
 }
 
 // isWatchedResource returns true if the given resource is not ignored, false otherwise.
@@ -342,24 +402,31 @@ func (c *Controller) processNextWorkItem() bool {
 
 	defer c.workQueue.Done(key)
 
-	if key != configRefreshKey {
-		if err := c.syncShadowService(key.(string)); err != nil {
-			c.handleErr(key, fmt.Errorf("unable to sync shadow service: %w", err))
-			return true
-		}
+	keySli := strings.Split(key.(string), ":")
+	if len(keySli) < 2 {
+		return false
 	}
+	fmt.Println(keySli[0], keySli[1], "========")
+	// TODO handle queue
+
+	//if key != configRefreshKey {
+	//	if err := c.syncShadowService(key.(string)); err != nil {
+	//		c.handleErr(key, fmt.Errorf("unable to sync shadow service: %w", err))
+	//		return true
+	//	}
+	//}
 
 	// Build and store config.
-	topo, err := c.topologyBuilder.Build(c.resourceFilter)
-	if err != nil {
-		c.handleErr(key, fmt.Errorf("unable to build topology: %w", err))
-		return true
-	}
-
-	conf := c.provider.BuildConfig(topo)
-
-	c.store.SetTopology(topo)
-	c.store.SetConfig(conf)
+	//topo, err := c.topologyBuilder.Build(c.resourceFilter)
+	//if err != nil {
+	//	c.handleErr(key, fmt.Errorf("unable to build topology: %w", err))
+	//	return true
+	//}
+	//
+	//conf := c.provider.BuildConfig(topo)
+	//
+	//c.store.SetTopology(topo)
+	//c.store.SetConfig(conf)
 
 	c.workQueue.Forget(key)
 
@@ -367,31 +434,31 @@ func (c *Controller) processNextWorkItem() bool {
 }
 
 // syncShadowService calls the shadow service manager to keep the shadow service state in sync with the service events received.
-func (c *Controller) syncShadowService(key string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	namespace, name, err := cache.SplitMetaNamespaceKey(key)
-	if err != nil {
-		return err
-	}
-
-	svc, err := c.serviceLister.Services(namespace).Get(name)
-	if errors.IsNotFound(err) {
-		return c.shadowServiceManager.Delete(ctx, namespace, name)
-	}
-
-	if err != nil {
-		return err
-	}
-
-	_, err = c.shadowServiceManager.CreateOrUpdate(ctx, svc)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
+//func (c *Controller) syncShadowService(key string) error {
+//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//
+//	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+//	if err != nil {
+//		return err
+//	}
+//
+//	svc, err := c.serviceLister.Services(namespace).Get(name)
+//	if errors.IsNotFound(err) {
+//		return c.shadowServiceManager.Delete(ctx, namespace, name)
+//	}
+//
+//	if err != nil {
+//		return err
+//	}
+//
+//	_, err = c.shadowServiceManager.CreateOrUpdate(ctx, svc)
+//	if err != nil {
+//		return err
+//	}
+//
+//	return nil
+//}
 
 // handleErr re-queues the given work key only if the maximum number of attempts is not exceeded.
 func (c *Controller) handleErr(key interface{}, err error) {

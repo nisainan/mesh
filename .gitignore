@@ -16,3 +16,5 @@ vendor
 pages/
 mesh-gh-pages*
 *.zip
+.fleet/
+cmd/mesh/mesh

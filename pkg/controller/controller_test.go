@@ -36,17 +36,17 @@ func TestController_NewMeshController(t *testing.T) {
 	log.SetLevel(logrus.DebugLevel)
 
 	// Create a new controller with base HTTP mode.
-	controller := NewMeshController(clientMock, Config{
+	controller, _ := NewMeshController(clientMock, Config{
 		ACLEnabled:       false,
 		DefaultMode:      "http",
 		Namespace:        traefikMeshNamespace,
 		IgnoreNamespaces: []string{},
-		MinHTTPPort:      minHTTPPort,
-		MaxHTTPPort:      maxHTTPPort,
-		MinTCPPort:       minTCPPort,
-		MaxTCPPort:       maxTCPPort,
-		MinUDPPort:       minUDPPort,
-		MaxUDPPort:       maxUDPPort,
+		//MinHTTPPort:      minHTTPPort,
+		//MaxHTTPPort:      maxHTTPPort,
+		//MinTCPPort:       minTCPPort,
+		//MaxTCPPort:       maxTCPPort,
+		//MinUDPPort:       minUDPPort,
+		//MaxUDPPort:       maxUDPPort,
 	}, store, log)
 
 	assert.NotNil(t, controller)
@@ -61,17 +61,17 @@ func TestController_NewMeshControllerWithSMI(t *testing.T) {
 	log.SetLevel(logrus.DebugLevel)
 
 	// Create a new controller with base HTTP mode, in SMI mode.
-	controller := NewMeshController(clientMock, Config{
+	controller, _ := NewMeshController(clientMock, Config{
 		ACLEnabled:       true,
 		DefaultMode:      "http",
 		Namespace:        traefikMeshNamespace,
 		IgnoreNamespaces: []string{},
-		MinHTTPPort:      minHTTPPort,
-		MaxHTTPPort:      maxHTTPPort,
-		MinTCPPort:       minTCPPort,
-		MaxTCPPort:       maxTCPPort,
-		MinUDPPort:       minUDPPort,
-		MaxUDPPort:       maxUDPPort,
+		//MinHTTPPort:      minHTTPPort,
+		//MaxHTTPPort:      maxHTTPPort,
+		//MinTCPPort:       minTCPPort,
+		//MaxTCPPort:       maxTCPPort,
+		//MinUDPPort:       minUDPPort,
+		//MaxUDPPort:       maxUDPPort,
 	}, store, log)
 
 	assert.NotNil(t, controller)

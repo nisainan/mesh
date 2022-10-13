@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,18 +8,16 @@ import (
 	"net/http"
 	"time"
 
+	"gitlab.oneitfarm.com/bifrost/sesdk/discovery"
+
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
-	"github.com/traefik/mesh/pkg/k8s"
 	"github.com/traefik/mesh/pkg/provider"
 	"github.com/traefik/mesh/pkg/safe"
 	"github.com/traefik/mesh/pkg/topology"
 	"github.com/traefik/traefik/v2/pkg/config/dynamic"
 	kubeerror "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
 	listers "k8s.io/client-go/listers/core/v1"
 )
 
@@ -35,6 +32,7 @@ type API struct {
 	namespace string
 	podLister listers.PodLister
 	log       logrus.FieldLogger
+	discover  *discovery.Discovery
 }
 
 type podInfo struct {
@@ -44,32 +42,7 @@ type podInfo struct {
 }
 
 // NewAPI creates a new api.
-func NewAPI(log logrus.FieldLogger, port int32, host string, client kubernetes.Interface, namespace string) (*API, error) {
-	selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
-		MatchLabels: map[string]string{"component": "maesh-mesh"},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("unable to create label selector: %w", err)
-	}
-
-	informerFactory := informers.NewSharedInformerFactoryWithOptions(client, k8s.ResyncPeriod,
-		informers.WithNamespace(namespace),
-		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
-			options.LabelSelector = selector.String()
-		}))
-
-	podLister := informerFactory.Core().V1().Pods().Lister()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	informerFactory.Start(ctx.Done())
-
-	for t, ok := range informerFactory.WaitForCacheSync(ctx.Done()) {
-		if !ok {
-			return nil, fmt.Errorf("timed out while waiting for informer cache to sync: %s", t)
-		}
-	}
+func NewAPI(log logrus.FieldLogger, port int32, host string, namespace string) (*API, error) {
 
 	router := mux.NewRouter()
 
@@ -83,18 +56,23 @@ func NewAPI(log logrus.FieldLogger, port int32, host string, client kubernetes.I
 		configuration: safe.New(provider.NewDefaultDynamicConfig()),
 		topology:      safe.New(topology.NewTopology()),
 		readiness:     safe.New(false),
-		podLister:     podLister,
-		namespace:     namespace,
-		log:           log,
+		//podLister:     podLister,
+		namespace: namespace,
+		log:       log,
 	}
 
 	router.HandleFunc("/api/configuration/current", api.getCurrentConfiguration)
 	router.HandleFunc("/api/topology/current", api.getCurrentTopology)
+	router.HandleFunc("/api/topology/pods", api.getCurrentPods)
 	router.HandleFunc("/api/status/nodes", api.getMeshNodes)
 	router.HandleFunc("/api/status/node/{node}/configuration", api.getMeshNodeConfiguration)
 	router.HandleFunc("/api/status/readiness", api.getReadiness)
 
 	return api, nil
+}
+
+func (a *API) SetPodLister(podLister listers.PodLister) {
+	a.podLister = podLister
 }
 
 // SetReadiness sets the readiness flag in the API.
@@ -129,6 +107,42 @@ func (a *API) getCurrentTopology(w http.ResponseWriter, _ *http.Request) {
 
 	if err := json.NewEncoder(w).Encode(a.topology.Get()); err != nil {
 		a.log.Errorf("Unable to serialize topology: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
+	}
+}
+
+// getCurrentPods returns the current pods.
+func (a *API) getCurrentPods(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	podList, err := a.podLister.List(labels.Everything())
+	if err != nil {
+		a.log.Errorf("Unable to retrieve pod list: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
+
+		return
+	}
+
+	podInfoList := make([]podInfo, len(podList))
+	for i, pod := range podList {
+		readiness := true
+
+		for _, status := range pod.Status.ContainerStatuses {
+			if !status.Ready {
+				// If there is a non-ready container, pod is not ready.
+				readiness = false
+				break
+			}
+		}
+
+		podInfoList[i] = podInfo{
+			Name:  pod.Name,
+			IP:    pod.Status.PodIP,
+			Ready: readiness,
+		}
+	}
+
+	if err := json.NewEncoder(w).Encode(podInfoList); err != nil {
+		a.log.Errorf("Unable to serialize pod list: %v", err)
 		http.Error(w, "", http.StatusInternalServerError)
 	}
 }

@@ -131,7 +131,7 @@ func TestEnqueueWorkHandler_enqueueWork(t *testing.T) {
 			workQueue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 
 			handler := &enqueueWorkHandler{logger: log, workQueue: workQueue}
-			handler.enqueueWork(test.obj)
+			handler.enqueueWork(ActionAdd, test.obj)
 
 			assert.Equal(t, test.expectedLen, workQueue.Len())
 

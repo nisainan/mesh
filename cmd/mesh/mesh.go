@@ -93,24 +93,29 @@ func traefikMeshCommand(config *cmd.TraefikMeshConfiguration) error {
 	aclEnabled := config.ACL || config.SMI
 	log.Debugf("ACL mode enabled: %t", aclEnabled)
 
-	apiServer, err := api.NewAPI(log, config.APIPort, config.APIHost, clients.KubernetesClient(), config.Namespace)
+	apiServer, err := api.NewAPI(log, config.APIPort, config.APIHost, config.Namespace)
 	if err != nil {
 		return fmt.Errorf("unable to create the API server: %w", err)
 	}
 
-	ctr := controller.NewMeshController(clients, controller.Config{
+	ctr, err := controller.NewMeshController(clients, controller.Config{
 		ACLEnabled:       aclEnabled,
 		DefaultMode:      config.DefaultMode,
 		Namespace:        config.Namespace,
 		WatchNamespaces:  config.WatchNamespaces,
 		IgnoreNamespaces: config.IgnoreNamespaces,
-		MinHTTPPort:      minHTTPPort,
-		MaxHTTPPort:      getMaxPort(minHTTPPort, config.LimitHTTPPort),
-		MinTCPPort:       minTCPPort,
-		MaxTCPPort:       getMaxPort(minTCPPort, config.LimitTCPPort),
-		MinUDPPort:       minUDPPort,
-		MaxUDPPort:       getMaxPort(minUDPPort, config.LimitUDPPort),
+		//MinHTTPPort:      minHTTPPort,
+		//MaxHTTPPort:      getMaxPort(minHTTPPort, config.LimitHTTPPort),
+		//MinTCPPort:       minTCPPort,
+		//MaxTCPPort:       getMaxPort(minTCPPort, config.LimitTCPPort),
+		//MinUDPPort:       minUDPPort,
+		//MaxUDPPort:       getMaxPort(minUDPPort, config.LimitUDPPort),
 	}, apiServer, log)
+
+	if err != nil {
+		return err
+	}
+	apiServer.SetPodLister(ctr.GetPodListener())
 
 	var wg sync.WaitGroup
 
