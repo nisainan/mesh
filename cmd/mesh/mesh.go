@@ -110,7 +110,7 @@ func traefikMeshCommand(config *cmd.TraefikMeshConfiguration) error {
 		//MaxTCPPort:       getMaxPort(minTCPPort, config.LimitTCPPort),
 		//MinUDPPort:       minUDPPort,
 		//MaxUDPPort:       getMaxPort(minUDPPort, config.LimitUDPPort),
-	}, apiServer, log)
+	}, log)
 
 	if err != nil {
 		return err

@@ -8,14 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"gitlab.oneitfarm.com/bifrost/sesdk/discovery"
-
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
-	"github.com/traefik/mesh/pkg/provider"
-	"github.com/traefik/mesh/pkg/safe"
-	"github.com/traefik/mesh/pkg/topology"
-	"github.com/traefik/traefik/v2/pkg/config/dynamic"
+	"gitlab.oneitfarm.com/bifrost/sesdk/discovery"
 	kubeerror "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	listers "k8s.io/client-go/listers/core/v1"
@@ -25,9 +20,9 @@ import (
 type API struct {
 	http.Server
 
-	readiness     *safe.Safe
-	configuration *safe.Safe
-	topology      *safe.Safe
+	//readiness     *safe.Safe
+	//configuration *safe.Safe
+	//topology      *safe.Safe
 
 	namespace string
 	podLister listers.PodLister
@@ -53,20 +48,20 @@ func NewAPI(log logrus.FieldLogger, port int32, host string, namespace string) (
 			WriteTimeout: 5 * time.Second,
 			Handler:      router,
 		},
-		configuration: safe.New(provider.NewDefaultDynamicConfig()),
-		topology:      safe.New(topology.NewTopology()),
-		readiness:     safe.New(false),
+		//configuration: safe.New(provider.NewDefaultDynamicConfig()),
+		//topology:      safe.New(topology.NewTopology()),
+		//readiness:     safe.New(false),
 		//podLister:     podLister,
 		namespace: namespace,
 		log:       log,
 	}
 
-	router.HandleFunc("/api/configuration/current", api.getCurrentConfiguration)
-	router.HandleFunc("/api/topology/current", api.getCurrentTopology)
+	//router.HandleFunc("/api/configuration/current", api.getCurrentConfiguration)
+	//router.HandleFunc("/api/topology/current", api.getCurrentTopology)
 	router.HandleFunc("/api/topology/pods", api.getCurrentPods)
 	router.HandleFunc("/api/status/nodes", api.getMeshNodes)
-	router.HandleFunc("/api/status/node/{node}/configuration", api.getMeshNodeConfiguration)
-	router.HandleFunc("/api/status/readiness", api.getReadiness)
+	//router.HandleFunc("/api/status/node/{node}/configuration", api.getMeshNodeConfiguration)
+	//router.HandleFunc("/api/status/readiness", api.getReadiness)
 
 	return api, nil
 }
@@ -76,40 +71,40 @@ func (a *API) SetPodLister(podLister listers.PodLister) {
 }
 
 // SetReadiness sets the readiness flag in the API.
-func (a *API) SetReadiness(isReady bool) {
-	a.readiness.Set(isReady)
-	a.log.Debugf("API readiness: %t", isReady)
-}
-
-// SetConfig sets the current dynamic configuration.
-func (a *API) SetConfig(cfg *dynamic.Configuration) {
-	a.configuration.Set(cfg)
-}
-
-// SetTopology sets the current topology.
-func (a *API) SetTopology(topo *topology.Topology) {
-	a.topology.Set(topo)
-}
+//func (a *API) SetReadiness(isReady bool) {
+//	a.readiness.Set(isReady)
+//	a.log.Debugf("API readiness: %t", isReady)
+//}
+//
+//// SetConfig sets the current dynamic configuration.
+//func (a *API) SetConfig(cfg *dynamic.Configuration) {
+//	a.configuration.Set(cfg)
+//}
+//
+//// SetTopology sets the current topology.
+//func (a *API) SetTopology(topo *topology.Topology) {
+//	a.topology.Set(topo)
+//}
 
 // getCurrentConfiguration returns the current configuration.
-func (a *API) getCurrentConfiguration(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if err := json.NewEncoder(w).Encode(a.configuration.Get()); err != nil {
-		a.log.Errorf("Unable to serialize dynamic configuration: %v", err)
-		http.Error(w, "", http.StatusInternalServerError)
-	}
-}
-
-// getCurrentTopology returns the current topology.
-func (a *API) getCurrentTopology(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if err := json.NewEncoder(w).Encode(a.topology.Get()); err != nil {
-		a.log.Errorf("Unable to serialize topology: %v", err)
-		http.Error(w, "", http.StatusInternalServerError)
-	}
-}
+//func (a *API) getCurrentConfiguration(w http.ResponseWriter, _ *http.Request) {
+//	w.Header().Set("Content-Type", "application/json")
+//
+//	if err := json.NewEncoder(w).Encode(a.configuration.Get()); err != nil {
+//		a.log.Errorf("Unable to serialize dynamic configuration: %v", err)
+//		http.Error(w, "", http.StatusInternalServerError)
+//	}
+//}
+//
+//// getCurrentTopology returns the current topology.
+//func (a *API) getCurrentTopology(w http.ResponseWriter, _ *http.Request) {
+//	w.Header().Set("Content-Type", "application/json")
+//
+//	if err := json.NewEncoder(w).Encode(a.topology.Get()); err != nil {
+//		a.log.Errorf("Unable to serialize topology: %v", err)
+//		http.Error(w, "", http.StatusInternalServerError)
+//	}
+//}
 
 // getCurrentPods returns the current pods.
 func (a *API) getCurrentPods(w http.ResponseWriter, _ *http.Request) {
@@ -148,20 +143,20 @@ func (a *API) getCurrentPods(w http.ResponseWriter, _ *http.Request) {
 }
 
 // getReadiness returns the current readiness value, and sets the status code to 500 if not ready.
-func (a *API) getReadiness(w http.ResponseWriter, _ *http.Request) {
-	isReady, _ := a.readiness.Get().(bool)
-	if !isReady {
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-
-	if err := json.NewEncoder(w).Encode(isReady); err != nil {
-		a.log.Errorf("Unable to serialize readiness: %v", err)
-		http.Error(w, "", http.StatusInternalServerError)
-	}
-}
+//func (a *API) getReadiness(w http.ResponseWriter, _ *http.Request) {
+//	isReady, _ := a.readiness.Get().(bool)
+//	if !isReady {
+//		http.Error(w, "", http.StatusInternalServerError)
+//		return
+//	}
+//
+//	w.Header().Set("Content-Type", "application/json")
+//
+//	if err := json.NewEncoder(w).Encode(isReady); err != nil {
+//		a.log.Errorf("Unable to serialize readiness: %v", err)
+//		http.Error(w, "", http.StatusInternalServerError)
+//	}
+//}
 
 // getMeshNodes returns a list of mesh nodes visible from the controller, and some basic readiness info.
 func (a *API) getMeshNodes(w http.ResponseWriter, _ *http.Request) {

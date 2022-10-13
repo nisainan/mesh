@@ -1,5 +1,8 @@
 FROM golang:1.19-alpine AS base-image
 
+ENV GO111MODULE=on \
+    GOPROXY=https://goproxy.oneitfarm.com,https://goproxy.cn,direct
+
 # Package dependencies
 RUN apk --no-cache --no-progress add \
     bash \

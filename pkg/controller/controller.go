@@ -12,9 +12,6 @@ import (
 	"github.com/traefik/mesh/cmd"
 	"github.com/traefik/mesh/pkg/dis"
 	"github.com/traefik/mesh/pkg/k8s"
-	"github.com/traefik/mesh/pkg/provider"
-	"github.com/traefik/mesh/pkg/topology"
-	"github.com/traefik/traefik/v2/pkg/config/dynamic"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -37,16 +34,16 @@ const (
 )
 
 // SharedStore is used to share the controller state.
-type SharedStore interface {
-	SetConfig(cfg *dynamic.Configuration)
-	SetTopology(topo *topology.Topology)
-	SetReadiness(isReady bool)
-}
-
-// TopologyBuilder builds Topologies.
-type TopologyBuilder interface {
-	Build(resourceFilter *k8s.ResourceFilter) (*topology.Topology, error)
-}
+//type SharedStore interface {
+//	SetConfig(cfg *dynamic.Configuration)
+//	SetTopology(topo *topology.Topology)
+//	SetReadiness(isReady bool)
+//}
+//
+//// TopologyBuilder builds Topologies.
+//type TopologyBuilder interface {
+//	Build(resourceFilter *k8s.ResourceFilter) (*topology.Topology, error)
+//}
 
 // Config holds the configuration of the controller.
 type Config struct {
@@ -71,13 +68,13 @@ type Controller struct {
 	cfg       Config
 	workQueue workqueue.RateLimitingInterface
 	//shadowServiceManager *ShadowServiceManager
-	provider       *provider.Provider
+	//provider       *provider.Provider
 	resourceFilter *k8s.ResourceFilter
 	//tcpStateTable        *PortMapping
 	//udpStateTable        *PortMapping
-	topologyBuilder TopologyBuilder
-	store           SharedStore
-	logger          logrus.FieldLogger
+	//topologyBuilder TopologyBuilder
+	//store           SharedStore
+	logger logrus.FieldLogger
 
 	clients           k8s.Client
 	kubernetesFactory informers.SharedInformerFactory
@@ -99,15 +96,15 @@ type Controller struct {
 
 // NewMeshController builds the informers and other required components of the mesh controller, and returns an
 // initialized mesh controller object.
-func NewMeshController(clients k8s.Client, cfg Config, store SharedStore, logger logrus.FieldLogger) (*Controller, error) {
+func NewMeshController(clients k8s.Client, cfg Config, logger logrus.FieldLogger) (*Controller, error) {
 	c := &Controller{
 		logger:  logger,
 		cfg:     cfg,
 		clients: clients,
-		store:   store,
-		stopCh:  make(chan struct{}),
-		ticker:  time.NewTicker(time.Second * 3),
-		dis:     dis.NewDiscovery(),
+		//store:   store,
+		stopCh: make(chan struct{}),
+		ticker: time.NewTicker(time.Second * 3),
+		dis:    dis.NewDiscovery(),
 	}
 	pool, err := ants.NewPool(500)
 	if err != nil {
@@ -244,7 +241,7 @@ func (c *Controller) Run() error {
 	//}
 
 	// Enable API readiness endpoint, informers are started and default conf is available.
-	c.store.SetReadiness(true)
+	//c.store.SetReadiness(true)
 
 	// Start to poll work from the queue.
 	waitGroup.Add(2)
